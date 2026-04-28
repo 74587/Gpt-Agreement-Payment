@@ -54,8 +54,8 @@ flowchart LR
 - 一个出口在 EU / US 的代理（PayPal 锁地区，Stripe 锁国家）
 - 一个 Cloudflare zone（用于开 catch-all 子域注册邮箱）
 - 一个 OpenAI 兼容的 VLM API key（hCaptcha 求解用，自建 vLLM 也行）
-- 一个兼容 createTask/getTaskResult 协议的打码平台 API key（passive captcha + 兜底）
 - 一台能跑 Camoufox + Playwright 的 Linux（约 5 GB 磁盘 + 2 GB 内存）
+- （可选）一个兼容 createTask/getTaskResult 协议的打码平台 API key，作为浏览器 passive captcha 的兜底
 
 第一次完整跑通通常要花 1–3 小时调通配置。daemon 模式跑稳后，单次 pipeline 约 5 分钟。
 
