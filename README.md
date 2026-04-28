@@ -176,6 +176,18 @@ xvfb-run -a python pipeline.py --config CTF-pay/config.paypal.json --paypal --da
 
 ---
 
+## Star History
+
+<a href="https://star-history.com/#DanOps-1/gpt-pp-team&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=DanOps-1/gpt-pp-team&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=DanOps-1/gpt-pp-team&type=Date" />
+    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=DanOps-1/gpt-pp-team&type=Date" />
+  </picture>
+</a>
+
+---
+
 ## 免责声明
 
 > [!IMPORTANT]
