@@ -38,6 +38,16 @@ def _project_pay(answers: dict) -> dict:
         }
     if "team_system" in answers:
         out["team_system"] = answers["team_system"]
+    if pm == "gopay" and "gopay" in answers:
+        gp = answers["gopay"] or {}
+        if all(gp.get(k) for k in ("country_code", "phone_number", "pin")):
+            out["gopay"] = {
+                "country_code": str(gp["country_code"]).lstrip("+"),
+                "phone_number": str(gp["phone_number"]),
+                "pin": str(gp["pin"]),
+            }
+            if gp.get("midtrans_client_id"):
+                out["gopay"]["midtrans_client_id"] = gp["midtrans_client_id"]
     if "team_plan" in answers:
         tp = answers["team_plan"] or {}
         plan: dict = {}
@@ -86,7 +96,13 @@ def _project_reg(answers: dict) -> dict:
     out: dict = {}
     pm = _payment_method(answers)
     if "imap" in answers:
-        out["mail"] = answers["imap"]
+        mail = dict(answers["imap"])
+        # 用 cloudflare zone 作为 catch-all 域；email routing 需在 CF 那边配好转发到 mail.email
+        zones = (answers.get("cloudflare") or {}).get("zone_names") or []
+        if zones:
+            mail["catch_all_domain"] = zones[0]
+            mail["catch_all_domains"] = list(zones)
+        out["mail"] = mail
     if "card" in answers and pm in ("card", "both"):
         out["card"] = {k: answers["card"].get(k, "") for k in ("number", "cvc", "exp_month", "exp_year")}
     if "billing" in answers:
@@ -104,6 +120,13 @@ def write_configs(answers: dict) -> dict:
     """Returns {pay_path, reg_path, backups: [path, ...]}."""
     pay_skeleton = json.loads(s.PAY_EXAMPLE_PATH.read_text(encoding="utf-8"))
     reg_skeleton = json.loads(s.REG_EXAMPLE_PATH.read_text(encoding="utf-8"))
+
+    # Skeleton 里 auto_register.config_path 默认指向 .example.json 模板（imap_server=imap.example.com 之类的占位），
+    # 直接 merge 后 pipeline 子进程会读到模板 → DNS 解析占位 hostname 失败。
+    # 用 wizard 实际写的真实 reg 路径覆盖它。
+    auth = pay_skeleton.setdefault("fresh_checkout", {}).setdefault("auth", {})
+    auto = auth.setdefault("auto_register", {})
+    auto["config_path"] = str(s.REG_CONFIG_PATH)
 
     pay = _deep_merge(pay_skeleton, _project_pay(answers))
     reg = _deep_merge(reg_skeleton, _project_reg(answers))

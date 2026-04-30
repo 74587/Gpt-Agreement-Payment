@@ -21,7 +21,7 @@ flowchart LR
 ## 文件组织
 
 ```
-gpt-pp-team/
+Gpt-Agreement-Payment/
 ├── pipeline.py                     # 编排器：单次 / 批量 / daemon / self-dealer
 ├── CTF-pay/                        # Stripe + PayPal 协议重放
 │   ├── card.py                     # 主程序，约 8000 行

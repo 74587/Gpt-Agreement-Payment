@@ -555,7 +555,7 @@ def browser_register(cfg, mail_provider) -> dict:
                 result["refresh_token"] = result.get("refresh_token", "") or ""
             else:
                 try:
-                    codex_client_id = "YOUR_OPENAI_CODEX_CLIENT_ID"
+                    codex_client_id = "app_EMoamEEZ73f0CkXaXp7hrann"
                     codex_redirect = "http://localhost:1455/auth/callback"
                     codex_scope = "openid email profile offline_access"
                     codex_state = _b64url_no_pad(secrets.token_bytes(24))

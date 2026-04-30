@@ -3,7 +3,7 @@
     <header class="wizard-header">
       <div class="brand">
         <span class="brand-prompt">$</span>
-        <span class="brand-name">gpt-mitm</span>
+        <span class="brand-name">gpt-pay</span>
         <span class="brand-sub">// 运行控制</span>
         <span class="brand-clock">{{ clock }}</span>
       </div>
@@ -41,8 +41,17 @@
           </div>
 
           <div class="ctl-row toggles">
-            <TermToggle v-model="form.paypal">用 PayPal 支付</TermToggle>
+            <TermToggle v-model="form.paypal" :disabled="form.gopay">PayPal 支付</TermToggle>
+            <TermToggle v-model="form.gopay" @update:modelValue="onGoPayToggle">GoPay (印尼)</TermToggle>
           </div>
+          <div class="ctl-row toggles">
+            <TermToggle v-model="form.pay_only">--pay-only</TermToggle>
+            <TermToggle v-model="form.register_only" :disabled="form.pay_only">--register-only</TermToggle>
+          </div>
+          <p class="ctl-hint">
+            <code>--pay-only</code> 跳过注册，复用 config 里的 session_token；
+            <code>--register-only</code> 只注册不支付。
+          </p>
         </div>
 
         <div class="term-divider" data-tail="──────────">命令</div>
@@ -69,6 +78,29 @@
           </span>
         </div>
       </section>
+
+      <Teleport to="body">
+        <div v-if="otpDialog.open" class="otp-overlay" @click.self="() => {}">
+          <div class="otp-modal">
+            <div class="otp-head">
+              <span class="otp-prompt">$</span> GoPay WhatsApp OTP
+            </div>
+            <p class="otp-desc">查 WhatsApp，把刚收到的 6 位 OTP 输进来。提交后 gopay.py 自动继续。</p>
+            <input
+              class="otp-input"
+              v-model="otpDialog.value"
+              maxlength="8"
+              autofocus
+              :disabled="otpDialog.submitting"
+              @keyup.enter="submitOtp"
+              placeholder="000000"
+            />
+            <div class="otp-actions">
+              <TermBtn :loading="otpDialog.submitting" @click="submitOtp">提交</TermBtn>
+            </div>
+          </div>
+        </div>
+      </Teleport>
 
       <section class="run-logs">
         <div class="logs-head">
@@ -124,15 +156,25 @@ interface RunStatus {
   ended_at: number | null;
   exit_code: number | null;
   log_count: number;
+  otp_pending?: boolean;
 }
 
 const form = ref({
   mode: (router.currentRoute.value.query.mode as string) || "single",
   paypal: true,
+  gopay: false,
+  pay_only: false,
+  register_only: false,
   batch: 5,
   workers: 3,
   self_dealer: 4,
 });
+
+const otpDialog = ref({ open: false, value: "", submitting: false });
+
+function onGoPayToggle(v: boolean) {
+  if (v) form.value.paypal = false;
+}
 
 const status = ref<RunStatus>({
   running: false, pid: null, mode: null, cmd: null,
@@ -246,9 +288,16 @@ function openStream() {
       }
     } catch {}
   });
+  eventSource.addEventListener("otp_pending", () => {
+    if (!otpDialog.value.open) {
+      otpDialog.value.open = true;
+      otpDialog.value.value = "";
+    }
+  });
   eventSource.addEventListener("done", async () => {
     eventSource?.close();
     eventSource = null;
+    otpDialog.value.open = false;
     await refreshStatus();
   });
   eventSource.onerror = () => {
@@ -263,8 +312,27 @@ async function logout() {
   router.push("/login");
 }
 
+async function submitOtp() {
+  const v = otpDialog.value.value.trim();
+  if (!v) {
+    message.warning("请输入 OTP");
+    return;
+  }
+  otpDialog.value.submitting = true;
+  try {
+    await api.post("/run/otp", { otp: v });
+    otpDialog.value.open = false;
+    otpDialog.value.value = "";
+    message.success("OTP 已提交");
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || "提交失败");
+  } finally {
+    otpDialog.value.submitting = false;
+  }
+}
+
 watch(
-  () => [form.value.mode, form.value.paypal, form.value.batch, form.value.workers, form.value.self_dealer],
+  () => [form.value.mode, form.value.paypal, form.value.gopay, form.value.pay_only, form.value.register_only, form.value.batch, form.value.workers, form.value.self_dealer],
   refreshPreview,
   { immediate: false }
 );
@@ -277,8 +345,14 @@ onMounted(async () => {
   try {
     await store.loadFromServer();
     const pm = (store.answers.payment as any)?.method;
-    if (pm === "card") form.value.paypal = false;
-    else if (pm === "paypal" || pm === "both") form.value.paypal = true;
+    if (pm === "gopay") {
+      form.value.gopay = true;
+      form.value.paypal = false;
+    } else if (pm === "card") {
+      form.value.paypal = false;
+    } else if (pm === "paypal" || pm === "both") {
+      form.value.paypal = true;
+    }
   } catch {}
 
   await refreshStatus();
@@ -326,7 +400,9 @@ onBeforeUnmount(() => {
 .form-stack { display: flex; flex-direction: column; gap: 12px; margin-bottom: 8px; }
 .ctl-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .ctl-row.sub { padding-left: 8px; border-left: 2px solid var(--border-strong); }
-.ctl-row.toggles { margin-top: 4px; }
+.ctl-row.toggles { margin-top: 4px; gap: 16px; flex-wrap: wrap; }
+.ctl-hint { color: var(--fg-tertiary); font-size: 11px; line-height: 1.6; margin: 4px 0 0; }
+.ctl-hint code { background: var(--bg-panel); padding: 1px 5px; border: 1px solid var(--border); font-size: 11px; }
 .ctl-label { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--fg-secondary); min-width: 60px; }
 
 .mode-pills { display: flex; gap: 0; border: 1px solid var(--border-strong); flex-wrap: wrap; }
@@ -378,6 +454,45 @@ onBeforeUnmount(() => {
 .log-line.log-warn .log-msg { color: var(--warn); }
 .log-line.log-ok .log-msg { color: var(--ok); }
 
+
+/* GoPay OTP modal */
+.otp-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 1000;
+}
+.otp-modal {
+  background: var(--bg-base);
+  border: 1px solid var(--accent);
+  padding: 24px 28px;
+  width: min(420px, 90vw);
+  font-family: inherit;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.25);
+}
+.otp-head {
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  margin-bottom: 4px;
+}
+.otp-prompt { color: var(--fg-tertiary); margin-right: 6px; }
+.otp-desc { color: var(--fg-secondary); font-size: 12px; line-height: 1.6; margin: 8px 0 16px; }
+.otp-input {
+  width: 100%; box-sizing: border-box;
+  padding: 12px 14px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-panel);
+  font: inherit; font-size: 22px;
+  letter-spacing: 0.4em;
+  text-align: center;
+  color: var(--fg-primary);
+  outline: none;
+  font-variant-numeric: tabular-nums;
+}
+.otp-input:focus { border-color: var(--accent); }
+.otp-actions { margin-top: 16px; display: flex; justify-content: flex-end; }
 
 @media (max-width: 1100px) {
   .run-body { grid-template-columns: 380px 1fr; }

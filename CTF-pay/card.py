@@ -4352,6 +4352,118 @@ def create_paypal_payment_method(
     return pm_id
 
 
+def _drive_gopay_from_redirect(
+    redirect_url: str,
+    cfg: dict,
+    otp_file: str = "",
+    session_id: str = "",
+) -> None:
+    """从 pm-redirects.stripe.com URL 接管 → Midtrans linking → GoPay PIN/OTP → 扣款。
+
+    复用 gopay 模块的 GoPayCharger.run_from_redirect。OTP 从 stdin（CLI）或
+    file-watch（webui runner）取。
+    """
+    import sys as _sys
+    from pathlib import Path as _Path
+    here = _Path(__file__).resolve().parent
+    if str(here) not in _sys.path:
+        _sys.path.insert(0, str(here))
+    import gopay as _gopay
+
+    auth_cfg = (cfg.get("fresh_checkout") or {}).get("auth") or {}
+    cs_session = _gopay._build_chatgpt_session(auth_cfg)
+    proxy = (cfg.get("proxy") or "").strip() or None
+    gopay_cfg = cfg.get("gopay") or {}
+
+    if otp_file:
+        provider = _gopay.file_watch_otp_provider(_Path(otp_file), timeout=300.0)
+    else:
+        provider = _gopay.cli_otp_provider
+
+    charger = _gopay.GoPayCharger(
+        cs_session, gopay_cfg,
+        otp_provider=provider, proxy=proxy,
+        runtime_cfg=cfg.get("runtime"),
+    )
+    _log(f"      [gopay] 从 redirect 接管 → {redirect_url[:80]}...")
+    result = charger.run_from_redirect(redirect_url, cs_id=session_id)
+    _log(f"      [gopay] 完成: {result}")
+
+
+def create_gopay_payment_method(
+    session: requests.Session,
+    pk: str,
+    card: dict,
+    session_id: str,
+    stripe_ver: str = STRIPE_VERSION_BASE,
+    ctx: dict = None,
+) -> str:
+    """创建 type=gopay 的 payment_method（印尼 e-wallet, ChatGPT Plus 用）"""
+    ctx = ctx or {}
+    guid = ctx.get("guid") or _gen_fingerprint()[0]
+    muid = ctx.get("muid") or _gen_fingerprint()[0]
+    sid  = ctx.get("sid")  or _gen_fingerprint()[0]
+    addr = card.get("address", {}) if card else {}
+    runtime_version = ctx.get("runtime_version") or DEFAULT_STRIPE_RUNTIME_VERSION
+    stripe_js_id = ctx.get("stripe_js_id", str(uuid.uuid4()))
+    elements_session_id = ctx.get("elements_session_id", _gen_elements_session_id())
+    elements_session_config_id = (
+        ctx.get("elements_session_config_id") or str(uuid.uuid4())
+    )
+    payment_method_checkout_config_id = (
+        ctx.get("payment_method_checkout_config_id")
+        or ctx.get("config_id")
+        or ""
+    )
+
+    data = {
+        "type": "gopay",
+        "billing_details[name]": (card or {}).get("name") or "John Doe",
+        "billing_details[email]": (card or {}).get("email") or "buyer@example.com",
+        "billing_details[address][country]": addr.get("country") or "US",
+        "billing_details[address][line1]": addr.get("line1") or "3110 Sunset Boulevard",
+        "billing_details[address][city]": addr.get("city") or "Los Angeles",
+        "billing_details[address][postal_code]": addr.get("postal_code") or "90026",
+        "billing_details[address][state]": addr.get("state") or "CA",
+        "payment_user_agent": (
+            f"stripe.js/{runtime_version}; stripe-js-v3/{runtime_version}; "
+            "payment-element; deferred-intent"
+        ),
+        "referrer": "https://chatgpt.com",
+        "time_on_page": str(ctx.get("time_on_page", random.randint(25000, 55000))),
+        "client_attribution_metadata[client_session_id]": stripe_js_id,
+        "client_attribution_metadata[checkout_session_id]": session_id,
+        "client_attribution_metadata[checkout_config_id]": payment_method_checkout_config_id,
+        "client_attribution_metadata[elements_session_id]": elements_session_id,
+        "client_attribution_metadata[elements_session_config_id]": elements_session_config_id,
+        "client_attribution_metadata[merchant_integration_source]": "elements",
+        "client_attribution_metadata[merchant_integration_subtype]": "payment-element",
+        "client_attribution_metadata[merchant_integration_version]": "2021",
+        "client_attribution_metadata[payment_intent_creation_flow]": "deferred",
+        "client_attribution_metadata[payment_method_selection_flow]": "automatic",
+        "client_attribution_metadata[merchant_integration_additional_elements][0]": "payment",
+        "client_attribution_metadata[merchant_integration_additional_elements][1]": "address",
+        "guid": guid,
+        "muid": muid,
+        "sid": sid,
+        "key": pk,
+        "_stripe_version": stripe_ver,
+    }
+
+    url = f"{STRIPE_API}/v1/payment_methods"
+    _log("[4/6] 创建 GoPay 支付方式 (payment_method type=gopay) ...")
+    _log_request("POST", url, data=data, tag="[4/6] create_gopay_payment_method")
+    resp = session.post(url, data=data, headers=_stripe_headers())
+    _log_response(resp, tag="[4/6] create_gopay_payment_method")
+    if resp.status_code != 200:
+        raise RuntimeError(f"创建 GoPay payment_method 失败 [{resp.status_code}]: {resp.text[:500]}")
+
+    pm = resp.json()
+    pm_id = pm["id"]
+    _log(f"      成功: {pm_id}  (gopay)")
+    return pm_id
+
+
 def _solve_arkose_funcaptcha(api_key: str, public_key: str, page_url: str, timeout: int = 120) -> str:
     """调用远端打码平台解 Arkose FunCaptcha"""
     if not api_key:
@@ -7808,6 +7920,8 @@ def run(
     offline_replay: bool = False,
     local_mock: bool = False,
     use_paypal: bool = False,
+    use_gopay: bool = False,
+    gopay_otp_file: str = "",
 ):
     _init_log()  # 初始化日志文件
 
@@ -7829,7 +7943,9 @@ def run(
         cfg.setdefault("local_mock", {})
         cfg["local_mock"]["enabled"] = True
 
-    # PayPal 模式校验
+    # PayPal / GoPay 模式校验
+    if use_paypal and use_gopay:
+        raise ValueError("--paypal 与 --gopay 互斥")
     paypal_cfg = cfg.get("paypal") or {}
     if use_paypal:
         has_login_creds = paypal_cfg.get("email") and paypal_cfg.get("password")
@@ -7842,6 +7958,10 @@ def run(
                 f"  [警告] PayPal 通常仅支持欧盟国家地址，当前 billing country={billing_country}。"
                 f"继续尝试，但可能被 Stripe 拒绝。"
             )
+    if use_gopay:
+        gopay_cfg = cfg.get("gopay") or {}
+        if not all(gopay_cfg.get(k) for k in ("country_code", "phone_number", "pin")):
+            raise ValueError("GoPay 模式需 cfg.gopay 提供 country_code / phone_number / pin")
 
     _FIRST_NAMES = [
         "JAMES", "JOHN", "ROBERT", "MICHAEL", "WILLIAM", "DAVID", "RICHARD", "JOSEPH",
@@ -8030,8 +8150,14 @@ def run(
     if use_paypal:
         # PayPal 必须走 shared_payment_method 模式（先创建 pm，再 confirm 引用）
         init_ctx["confirm_mode"] = "shared_payment_method"
+    elif use_gopay:
+        init_ctx["confirm_mode"] = "shared_payment_method"
+        init_ctx["payment_method_type"] = "gopay"
     else:
         init_ctx["confirm_mode"] = runtime_cfg.get("confirm_mode", "inline_payment_method_data")
+    # 把 processor_entity 透传给 manual_approval 阶段；默认 openai_llc（IDR/Plus 用）
+    if fresh_info and fresh_info.get("processor_entity"):
+        init_ctx["processor_entity"] = fresh_info["processor_entity"]
     init_ctx["frontend_execution"] = (
         runtime_cfg.get("frontend_execution")
         or DEFAULT_FRONTEND_EXECUTION
@@ -8190,6 +8316,11 @@ def run(
                 pm_id = create_paypal_payment_method(
                     http, pk, card, session_id, stripe_ver, ctx=init_ctx
                 )
+        elif use_gopay:
+            with _http_session_stage_proxy(http, stage_proxy_cfg, "payment_method"):
+                pm_id = create_gopay_payment_method(
+                    http, pk, card, session_id, stripe_ver, ctx=init_ctx
+                )
         elif init_ctx.get("confirm_mode") != "inline_payment_method_data":
             with _http_session_stage_proxy(http, stage_proxy_cfg, "payment_method"):
                 pm_id = create_payment_method(
@@ -8203,7 +8334,7 @@ def run(
                 pk,
                 session_id,
                 pm_id,
-                card if (not use_paypal and init_ctx.get("confirm_mode") == "inline_payment_method_data") else None,
+                card if (not use_paypal and not use_gopay and init_ctx.get("confirm_mode") == "inline_payment_method_data") else None,
                 captcha_token,
                 init_resp,
                 stripe_ver,
@@ -8214,7 +8345,7 @@ def run(
             )
 
         # PayPal 模式: 检测 redirect_to_url 并启动浏览器授权
-        if use_paypal:
+        if use_paypal or use_gopay:
             next_action = None
             for source_key in ("next_action", "payment_intent", "setup_intent"):
                 obj = confirm_data.get(source_key)
@@ -8235,16 +8366,23 @@ def run(
                 redirect_info = next_action.get("redirect_to_url", {})
                 paypal_redirect_url = redirect_info.get("url", "")
                 if paypal_redirect_url:
-                    _log(f"      PayPal redirect URL: {paypal_redirect_url[:100]}...")
-                    success = _handle_paypal_redirect(
-                        paypal_redirect_url,
-                        paypal_cfg,
-                        locale_profile=locale_profile,
-                        ctx=init_ctx,
-                    )
-                    if not success:
-                        raise RuntimeError("PayPal 授权失败或超时")
-                    _log("      PayPal 授权完成，继续 poll 结果 ...")
+                    _log(f"      redirect URL: {paypal_redirect_url[:100]}...")
+                    if use_gopay:
+                        _drive_gopay_from_redirect(
+                            paypal_redirect_url, cfg, gopay_otp_file,
+                            session_id=session_id,
+                        )
+                        _log("      GoPay 授权 + 扣款完成，继续 poll 结果 ...")
+                    else:
+                        success = _handle_paypal_redirect(
+                            paypal_redirect_url,
+                            paypal_cfg,
+                            locale_profile=locale_profile,
+                            ctx=init_ctx,
+                        )
+                        if not success:
+                            raise RuntimeError("PayPal 授权失败或超时")
+                        _log("      PayPal 授权完成，继续 poll 结果 ...")
                 else:
                     raise RuntimeError("PayPal confirm 返回了 redirect_to_url 但缺少 url 字段")
             else:
@@ -8259,7 +8397,11 @@ def run(
                         fresh_cfg = cfg.get("fresh_checkout") or {}
                         auth_cfg = fresh_cfg.get("auth") or {}
                         access_token = (auth_cfg.get("access_token") or "").strip()
-                        oai_device_id = (auth_cfg.get("oai_device_id") or "").strip()
+                        oai_device_id = (
+                            auth_cfg.get("oai_device_id")
+                            or auth_cfg.get("device_id")
+                            or ""
+                        ).strip()
                         cookie_header = (auth_cfg.get("cookie_header") or "").strip()
                         processor_entity = init_ctx.get("processor_entity") or "openai_ie"
                         # 推断: processor_entity 可能在 init_resp 或 fresh_info
@@ -8335,6 +8477,13 @@ def run(
                             url = (na.get("redirect_to_url") or {}).get("url", "")
                             if url:
                                 _log(f"      [manual_approval] 拿到 redirect: {url[:100]}")
+                                if use_gopay:
+                                    _drive_gopay_from_redirect(
+                                        url, cfg, gopay_otp_file,
+                                        session_id=session_id,
+                                    )
+                                    got_redirect = True
+                                    break
                                 success = _handle_paypal_redirect(
                                     url, paypal_cfg,
                                     locale_profile=locale_profile, ctx=init_ctx,
@@ -8598,6 +8747,16 @@ def main():
         help="使用 PayPal 支付（需要配置文件中包含 paypal 段，仅支持欧盟国家地址）",
     )
     parser.add_argument(
+        "--gopay",
+        action="store_true",
+        help="使用 GoPay tokenization (印尼 e-wallet, ChatGPT Plus)",
+    )
+    parser.add_argument(
+        "--gopay-otp-file",
+        default="",
+        help="webui 模式: gopay 从这个文件读 WhatsApp OTP",
+    )
+    parser.add_argument(
         "--json-result",
         action="store_true",
         help="输出结构化 JSON 结果到 stdout（供 pipeline 解析）",
@@ -8615,11 +8774,14 @@ def main():
             offline_replay=args.offline_replay,
             local_mock=args.local_mock,
             use_paypal=args.paypal,
+            use_gopay=args.gopay,
+            gopay_otp_file=args.gopay_otp_file,
         )
         if args.json_result and result:
             print("CARD_RESULT_JSON=" + json.dumps(result, ensure_ascii=False), flush=True)
     except Exception as e:
-        err_msg = f"\n[ERROR] {type(e).__name__}: {e}"
+        import traceback as _tb
+        err_msg = f"\n[ERROR] {type(e).__name__}: {e}\n{_tb.format_exc()}"
         print(err_msg, file=sys.stderr)
         # 记录失败
         _record_result(

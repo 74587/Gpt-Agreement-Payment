@@ -15,7 +15,7 @@ FRONTEND_DIST = Path(__file__).parent / "frontend" / "dist"
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="gpt-mitm webui")
+    app = FastAPI(title="Gpt-Agreement-Payment webui")
     app.include_router(setup_routes.router)
     app.include_router(auth_routes.router)
     app.include_router(wizard_routes.router)

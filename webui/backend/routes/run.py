@@ -17,6 +17,11 @@ class StartRequest(BaseModel):
     self_dealer: int = 0
     register_only: bool = False
     pay_only: bool = False
+    gopay: bool = False
+
+
+class OTPRequest(BaseModel):
+    otp: str = Field(min_length=4, max_length=12)
 
 
 @router.get("/status")
@@ -35,6 +40,14 @@ def start(req: StartRequest, user: str = CurrentUser):
 @router.post("/stop")
 def stop(user: str = CurrentUser):
     return runner.stop()
+
+
+@router.post("/otp")
+def submit_otp(req: OTPRequest, user: str = CurrentUser):
+    try:
+        return runner.submit_otp(req.otp)
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
 
 
 @router.get("/logs")
@@ -61,6 +74,9 @@ async def stream(user: str = CurrentUser):
                 last_seq = entry["seq"]
                 yield {"event": "line", "data": json.dumps(entry)}
             st = runner.status()
+            # OTP heartbeat: re-send periodically while pending
+            if st.get("otp_pending"):
+                yield {"event": "otp_pending", "data": json.dumps({"pending": True})}
             if not st["running"]:
                 # 进程已退出，再扫一次确保没遗漏，然后发 done
                 tail = runner.get_lines_since(last_seq, limit=500)
@@ -78,6 +94,6 @@ def preview(req: StartRequest, user: str = CurrentUser):
     """干跑：只返命令行不实际启动。"""
     cmd = runner.build_cmd(
         req.mode, req.paypal, req.batch, req.workers, req.self_dealer,
-        req.register_only, req.pay_only,
+        req.register_only, req.pay_only, gopay=req.gopay,
     )
     return {"cmd": cmd, "cmd_str": " ".join(cmd)}

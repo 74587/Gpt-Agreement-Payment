@@ -35,7 +35,7 @@ There is no dedicated `tests/` suite today. Validate changes with replay-based c
 - For new automated tests, use `pytest` with filenames like `test_*.py` and keep fixtures small.
 
 ## Commit & Pull Request Guidelines
-Git history is currently minimal (`Initial import of gpt-mitm CTF project`), so use clear imperative commit subjects, e.g. `Add local mock retry logging`.
+Git history is currently minimal (`Initial import of Gpt-Agreement-Payment project`), so use clear imperative commit subjects, e.g. `Add local mock retry logging`.
 
 PRs should include:
 

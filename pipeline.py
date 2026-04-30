@@ -36,6 +36,7 @@ ROOT = Path(__file__).resolve().parent
 CARDW_DIR = ROOT / "CTF-reg"
 CARD_DIR = ROOT / "CTF-pay"
 CARD_PY = CARD_DIR / "card.py"
+GOPAY_PY = CARD_DIR / "gopay.py"
 OUTPUT_DIR = ROOT / "output"
 (OUTPUT_DIR / "logs").mkdir(parents=True, exist_ok=True)
 RESULTS_FILE = OUTPUT_DIR / "pipeline_batch.jsonl"
@@ -675,12 +676,19 @@ class DatadomeSliderError(PaymentError):
 
 
 def pay(card_config_path, session_token=None, access_token=None,
-        device_id=None, use_paypal=False, python="python3", timeout=600):
+        device_id=None, use_paypal=False, use_gopay=False,
+        gopay_otp_file=None, python="python3", timeout=600):
     """执行 Stripe 支付流程。
 
+    use_paypal / use_gopay 互斥：默认 card 路径，paypal 走 PayPal browser，
+    gopay 走 GoPay tokenization (CTF-pay/gopay.py)。
     如果提供了 session_token/access_token，会临时覆盖配置文件中的凭证。
+    gopay_otp_file: webui 模式 OTP 文件路径（gopay.py file-watch 读取）。
     返回 dict: {status, session_id, chatgpt_email, ...}
     """
+    if use_paypal and use_gopay:
+        raise PaymentError("use_paypal 与 use_gopay 互斥")
+
     card_config_path = str(Path(card_config_path).resolve())
 
     # 如果有外部凭证，创建临时配置
@@ -715,12 +723,18 @@ def pay(card_config_path, session_token=None, access_token=None,
            "--config", config_to_use, "--json-result"]
     if use_paypal:
         cmd.append("--paypal")
+    elif use_gopay:
+        cmd.append("--gopay")
+        if gopay_otp_file:
+            cmd += ["--gopay-otp-file", str(gopay_otp_file)]
+    result_marker = "CARD_RESULT_JSON="
+    mode_label = "gopay" if use_gopay else ("paypal" if use_paypal else "card")
 
     env = dict(os.environ)
     env.pop("HTTP_PROXY", None)
     env.pop("HTTPS_PROXY", None)
 
-    print(f"[pay] 启动支付 (paypal={use_paypal}) ...")
+    print(f"[pay] 启动支付 (mode={mode_label}) ...")
 
     result_json = None
     datadome_slider = False
@@ -733,7 +747,7 @@ def pay(card_config_path, session_token=None, access_token=None,
         for line in proc.stdout:
             line = line.rstrip("\n")
             print(f"  [pay] {line}")
-            if line.startswith("CARD_RESULT_JSON="):
+            if line.startswith(result_marker):
                 payload = line.split("=", 1)[1]
                 result_json = json.loads(payload)
             if "CARD_DATADOME_SLIDER=1" in line:
@@ -765,6 +779,7 @@ def pay(card_config_path, session_token=None, access_token=None,
 # ──────────────────────────────────────────────
 
 def pipeline(card_config_path, cardw_config_path=None, use_paypal=False,
+             use_gopay=False, gopay_otp_file=None,
              timeout_reg=300, timeout_pay=600,
              pool=None, team_client=None, card_cfg=None, proxy_pool=None):
     """全链路: 注册 → 支付 → (可选) gpt-team 导入探测 → 更新域池
@@ -840,6 +855,8 @@ def pipeline(card_config_path, cardw_config_path=None, use_paypal=False,
                 access_token=reg.get("access_token"),
                 device_id=reg.get("device_id", ""),
                 use_paypal=use_paypal,
+                use_gopay=use_gopay,
+                gopay_otp_file=gopay_otp_file,
                 timeout=timeout_pay,
             )
             record["payment"] = {
@@ -2659,6 +2676,10 @@ def main():
                         help="CTF-reg 注册配置文件 (默认从 --config 中读取)")
     parser.add_argument("--paypal", action="store_true",
                         help="使用 PayPal 支付")
+    parser.add_argument("--gopay", action="store_true",
+                        help="使用 GoPay tokenization (印尼 e-wallet, ChatGPT Plus)")
+    parser.add_argument("--gopay-otp-file", default=None,
+                        help="webui 模式: gopay.py 从该文件读取 WhatsApp OTP")
     parser.add_argument("--register-only", action="store_true",
                         help="仅注册，不支付")
     parser.add_argument("--pay-only", action="store_true",
@@ -2676,6 +2697,10 @@ def main():
     parser.add_argument("--self-dealer-resume", default="", metavar="OWNER_EMAIL",
                         help="自产自销 resume 模式：跳过 Step 1，用已注册付费过的 owner（从 results.jsonl 读 team_id + rt）")
     args = parser.parse_args()
+
+    if args.paypal and args.gopay:
+        print("[ERROR] --paypal 与 --gopay 互斥", file=sys.stderr)
+        sys.exit(2)
 
     try:
         if args.daemon:
@@ -2698,7 +2723,8 @@ def main():
             print(json.dumps(result, ensure_ascii=False, indent=2))
 
         elif args.pay_only:
-            result = pay(args.config, use_paypal=args.paypal)
+            result = pay(args.config, use_paypal=args.paypal, use_gopay=args.gopay,
+                         gopay_otp_file=args.gopay_otp_file)
             print(f"\n结果: {result.get('status', '?')}")
 
         elif args.batch > 0:
@@ -2707,7 +2733,8 @@ def main():
 
         else:
             pipeline(args.config, cardw_config_path=args.cardw_config,
-                     use_paypal=args.paypal)
+                     use_paypal=args.paypal, use_gopay=args.gopay,
+                     gopay_otp_file=args.gopay_otp_file)
 
     except (RegistrationError, PaymentError) as e:
         print(f"\n[ERROR] {e}", file=sys.stderr)

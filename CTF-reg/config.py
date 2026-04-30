@@ -48,12 +48,17 @@ class BillingInfo:
 
 @dataclass
 class TeamPlanConfig:
-    """团队计划配置"""
+    """团队/Plus 计划配置"""
     plan_name: str = "chatgptteamplan"
     workspace_name: str = "MyWorkspace"
     price_interval: str = "month"
     seat_quantity: int = 5
     promo_campaign_id: str = "team-1-month-free"
+    # 以下字段由 webui wizard 写入，CTF-reg 不直接消费但需要兼容加载
+    plan_type: str = "team"           # team | plus
+    entry_point: str = ""             # team_workspace_purchase_modal | all_plans_pricing_modal
+    billing_country: str = ""
+    billing_currency: str = ""
 
 
 @dataclass

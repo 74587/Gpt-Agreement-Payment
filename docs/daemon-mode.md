@@ -312,8 +312,8 @@ grep -c "no_invite_permission" output/logs/daemon-*.log
 - 配 logrotate 切日志：
 
 ```
-# /etc/logrotate.d/gpt-pp-team
-/path/to/gpt-pp-team/output/logs/*.log {
+# /etc/logrotate.d/Gpt-Agreement-Payment
+/path/to/Gpt-Agreement-Payment/output/logs/*.log {
     daily
     rotate 14
     compress
