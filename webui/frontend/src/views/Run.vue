@@ -105,7 +105,9 @@
             <span class="status-dot idle">○</span> 空闲
           </span>
         </div>
+      </section>
 
+      <section class="run-inventory">
         <div class="term-divider inventory-divider" data-tail="──────────">账号库存</div>
         <div class="inventory-head">
           <div class="inventory-meta">
@@ -889,9 +891,15 @@ onBeforeUnmount(() => {
 .header-btn { background: transparent; border: 1px solid var(--border-strong); color: var(--fg-secondary); padding: 4px 12px; font: inherit; font-size: 11px; letter-spacing: 0.08em; cursor: pointer; transition: all 60ms; margin-left: 12px; }
 .header-btn:hover { background: var(--bg-raised); color: var(--fg-primary); border-color: var(--accent); }
 
-.run-body { flex: 1; display: grid; grid-template-columns: 480px 1fr; gap: 0; min-height: 0; overflow: hidden; }
+.run-body { flex: 1; display: grid; grid-template-columns: 420px minmax(420px, 1fr) minmax(360px, 1fr); gap: 0; min-height: 0; overflow: hidden; }
 .run-controls { padding: 24px; overflow-y: auto; border-right: 1px solid var(--border); }
+.run-inventory { padding: 20px 22px; overflow-y: auto; border-right: 1px solid var(--border); background: var(--bg-base); min-height: 0; }
 .run-logs { display: flex; flex-direction: column; min-height: 0; background: var(--bg-panel); }
+@media (max-width: 1280px) {
+  .run-body { grid-template-columns: 380px 1fr; grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); }
+  .run-controls { grid-row: 1 / span 2; }
+  .run-inventory { border-right: 0; border-bottom: 1px solid var(--border); }
+}
 
 .form-stack { display: flex; flex-direction: column; gap: 12px; margin-bottom: 8px; }
 .ctl-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
@@ -1225,13 +1233,12 @@ onBeforeUnmount(() => {
 .otp-input:focus { border-color: var(--accent); }
 .otp-actions { margin-top: 16px; display: flex; justify-content: flex-end; }
 
-@media (max-width: 1100px) {
-  .run-body { grid-template-columns: 380px 1fr; }
+@media (max-width: 1024px) {
   .inventory-stats { grid-template-columns: 1fr; }
 }
 @media (max-width: 900px) {
-  .run-body { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
-  .run-controls { border-right: 0; border-bottom: 1px solid var(--border); }
+  .run-body { grid-template-columns: 1fr; grid-template-rows: auto auto 1fr; }
+  .run-controls, .run-inventory { grid-row: auto; border-right: 0; border-bottom: 1px solid var(--border); }
   .inventory-head { align-items: flex-start; flex-direction: column; }
 }
 </style>
